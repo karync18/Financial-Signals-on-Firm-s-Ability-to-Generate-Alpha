@@ -439,6 +439,21 @@ final_df.describe().round(0)
 ### 5. Model Structure
 In our analysis, we employed linear regression to evaluate the relationship between annual stock returns and the five key predictive signals. Each signal is converted into a binary scoreby ranking firms into deciles and assigning a score of 1 to those in the top 30%, and 0 otherwise. By regressing winsorized annual returns on these binary signal indicators, we assessed whether the selected signals possess predictive power in explaining cross-sectional variation in stock returns and generating alpha returns.
 
+``` Python
+# Perform t test to see if if the high signal portfolio outperforms the baseline portfolio
+t_test_result = scs.ttest_rel(df_high['yret_high'], df_baseline['yret_baseline'])
+
+t_test_df = pd.DataFrame({
+    'statistic': [t_test_result.statistic],
+    'pvalue': [t_test_result.pvalue],
+    'df': [len(df_high) - 1]  # Degrees of freedom: n - 1
+})
+
+t_test_df
+```
+<img width="233" height="64" alt="image" src="https://github.com/user-attachments/assets/9933db34-2914-4f3a-a785-b2cebe82174f" />
+
+
 ### 6. Annual Return on 10 Decile Portfolios
 Based on the regression result of annual returns on the five signals, four out of five signals demonstrated outcomes consistent with our expectations. However, the result for the market capitalization (firm size) signal deviated from the anticipated direction, indicating an inverse relationship compared to what was predicted.
 
@@ -497,6 +512,413 @@ final_df.groupby('momentum_signal_score')[['momentum_signal_score','yret_winsori
 
 **Explanation:**
 The results show a pronounced return disparity between high- and low-momentum firms.Firms in the top 30% of momentum cohort achieved an average annual return of 49.3%, while those in the lower 70% experienced a negative return of -6.3%. This provides robust empirical evidence for the momentum effect and highlights its effectiveness as a return-enhancing strategy, even after adjusting for outliers through winsorization.
+
+## Portfolio Analysis
+### 1. Final Composite Score
+
+``` Python
+# Calculate total signal score by summing across selected columns
+signal_columns = [
+    'momentum_signal_score',
+    'mc_score',
+    'bv_score',
+    'op_profit_score',
+    'yoy_growth_at_score'
+]
+
+# Create the 'total_score' column
+final_df['total_score'] = final_df[signal_columns].sum(axis=1)
+
+# Group by total_score and calculate count and mean of annual returns
+score_summary = final_df.groupby('total_score')['yret_winsorize'].agg(['count', 'mean'])
+
+# Display result
+print(score_summary)
+```
+<img width="229" height="125" alt="image" src="https://github.com/user-attachments/assets/73ad61a4-ef34-4446-b73c-b21a891d742b" />
+
+**Explanation:**
+The table below presents the total scores derived from our five investment signals; market capitalisation, book-to-market value, operating profitability, asset growth, and momentum.
+
+The table shows a strong positive relationship between the total_score and average annual returns. Firms with a score of 0 earned a negative average return of –1.5%, while those with the the highest score of 4 achieved an impressive average return of nearly 59%. As the totalscore increases, the number of firms decreases, but the average return improves. Therefore,it illustrates that the higher total_scores are associated with stronger future performance.This pattern supports the effectiveness of total_score as a predictive signal for stock returns.
+
+### 2. Variable Analysis
+#### 2a. Correlation Analysis
+``` Python
+#Filter out low total_score values
+final_df_cleaned = final_df[(final_df['total_score'] > -3)]
+final_df_cleaned.describe().round(0)
+```
+<img width="1790" height="316" alt="image" src="https://github.com/user-attachments/assets/f94eed27-5068-47ce-816e-3999a403481c" />
+
+**Pearson Corrlation**
+
+``` Python
+# Correlation Coefficients (Pearson)
+final_df_cleaned[['momentum_signal_score','mc_score','bv_score','op_profit_score','yoy_growth_at_score']].corr()
+```
+<img width="797" height="182" alt="image" src="https://github.com/user-attachments/assets/978b447b-511f-4916-8ee8-49f8f3805a01" />
+
+**Spearman Correlation:**
+
+``` Python
+# Correlation Coefficients (Spearman)
+final_df_clean[['momentum_signal_score','mc_score','bv_score','op_profit_score','yoy_growth_at_score']].corr(method="spearman")
+```
+<img width="792" height="181" alt="image" src="https://github.com/user-attachments/assets/acefabce-6173-412f-ac6c-f3843cde24b3" />
+
+**Explanation:**
+Based on the two tables above, the momentum signal score and four fundamental factors consistently illustrated weak relationships in both the Pearson and Spearman correlation matrices. Specifically, momentum has low positive correlations with market capitalization (4%), book value (8.7%), operating profitability (7%), and year-over-year growth in total assets (5.3%). These findings suggest that the momentum signal is largely independent of traditional fundamental indicators. Moreover, the close alignment between Pearson and Spearman coefficients indicates that the relationships are approximately linear and monotonic, with no significant influence from outliers or non-linear patterns.
+
+Among the fundamentals, there are a few notable relationships:
+- Book value and market capitalization are moderately correlated (0.208), reflecting their common link to firm size.
+- Market capitalization and operating profitability show a negative correlation (–0.193), possibly indicating differing profitability patterns across firm sizes.
+- Operating profitability and asset growth are positively correlated (0.115), suggesting that more profitable firms tend to grow more rapidly.
+
+#### 2b. Regression Analysis
+
+**Multi-signal OLS Regression (All 5 Signals + Total Score)**
+``` Python
+# Define the OLS regression function
+def olsreg(d, yvar, xvars):
+    Y = d[yvar]
+    X = sma.add_constant(d[xvars])
+    reg = sma.OLS(Y, X).fit()
+    return reg.params
+
+# Group by year and run regression on each group
+final_df_clean_group = final_df_clean.groupby('pfyr')
+yearcoef = final_df_clean_group.apply(olsreg, 'yret_winsorize',
+                                       ['momentum_signal_score', 'mc_score', 'bv_score',
+                                        'op_profit_score', 'yoy_growth_at_score', 'total_score'])
+
+# Run t-test to see if average coefficient is significantly different from 0
+tstat, pval = scs.ttest_1samp(yearcoef, 0)
+
+# Display results
+print("\n T-Test Results for All Signals:")
+print("t-statistics:\n", tstat)
+print("p-values:\n", pval)
+```
+<img width="573" height="127" alt="image" src="https://github.com/user-attachments/assets/858b391f-47b8-4eee-92ea-e1b63c540648" />
+
+**Single-Variable Regression (Total Score Only)**
+``` Python
+# Define separate function (optional, same logic as above)
+def olsreg_total(d, yvar, xvar):
+    Y = d[yvar]
+    X = sma.add_constant(d[[xvar]])
+    reg = sma.OLS(Y, X).fit()
+    return reg.params
+
+# Apply regression by year
+yearcoef_total = final_df_clean_group.apply(olsreg_total, 'yret_winsorize', 'total_score')
+
+# T-test for average coefficient
+tstat_total, pval_total = scs.ttest_1samp(yearcoef_total, 0)
+
+# Display results
+print("\n T-Test Results for Total Score Only:")
+print("t-statistics:\n", tstat_total)
+print("p-values:\n", pval_total)
+```
+<img width="284" height="96" alt="image" src="https://github.com/user-attachments/assets/d3730132-f57a-413d-a1b6-ad57d4459699" />
+
+**Explanation:**
+
+In the OLS regression of annual stock returns on the selected composite signal (total_score), the results show a t-statistic of 10.12223859 and a p-value of 7.40547243e-09. This indicatesthat total_score has a statistically significant positive relationship with annual stock returns, as the p-value is below the 0.05 significance threshold. The findings suggest that firms with higher fundamental scores deliver higher annual returns, which reinforces the value of total_score as a predictive and reliable signal for stock performance.
+
+### 3. Form Final Portfolio
+
+To evaluate the performance of the signal, firms were split into three group based on their total signal score: low, medium, and high signal portfolios. For comparison, we defined the “high” portfolio as firms in the top tercile (i.e., those with total_score_decile = 2), while the bottom two terciles (i.e., total_score_decile ≤ 1) were combined to serve as the baseline portfolio.
+
+``` Python
+# Compute annual returns of decile portfolios 
+# Annual returns on 3 groups portfolios sorted year-by-year on on tot_score
+final_df['total_score_decile'] = pd.qcut(final_df['total_score'], 3, labels=False)
+final_df.groupby('total_score_decile')[['total_score','yret_winsorize']].agg(['count', 'mean'])
+
+final_df.to_csv('final_portfolio.csv', index=False)
+```
+
+``` Python
+# Step 2: Split final into portfolio to high and baseline of portfolio
+df_high = final_df[(final_df['total_score_decile'] == 2)]
+df_high = df_high.rename(columns={'yret_winsorize': 'yret_high'})[['pfyr', 'yret_high']]
+
+df_baseline = final_df[(final_df['total_score_decile'] <= 1)]
+df_baseline = final_df.rename(columns={'yret_winsorize': 'yret_baseline'})[['pfyr', 'yret_baseline']]
+```
+
+``` Python
+df_high
+```
+<img width="176" height="380" alt="image" src="https://github.com/user-attachments/assets/57db9d45-6c91-41a7-b556-85860b6219b4" />
+
+``` Python
+df_high.describe()
+```
+<img width="248" height="282" alt="image" src="https://github.com/user-attachments/assets/7181ac89-3675-4306-b8cc-ec1981919d4b" />
+
+``` Python
+df_baseline
+```
+<img width="169" height="656" alt="image" src="https://github.com/user-attachments/assets/f75cbd23-3ff2-4dac-af1a-5296edcdbb50" />
+
+``` Python
+df_baseline.describe()
+```
+<img width="266" height="280" alt="image" src="https://github.com/user-attachments/assets/0bf5a7f5-8f4f-4570-ba38-c18ffd8883c6" />
+
+**Annual Returns Over Time**
+``` Python
+import matplotlib.pyplot as plt
+
+# Define the data
+x = [2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014,
+     2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023]
+
+y = df_high['yret_high'].values[:len(x)]
+z = df_baseline['yret_baseline'].values[:len(x)]
+
+# Create the plot
+fig, ax = plt.subplots(figsize=(8, 6))
+
+# Plot the data with different colors and markers
+ax.plot(x, y, color='blue', marker='o', label='Portfolio to Long')
+ax.plot(x, z, color='green', marker='s', label='Rest of Portfolio')
+
+# Labels and title
+ax.set_xlabel('Year')
+ax.set_ylabel('Annual Return')
+ax.set_title('Annual Returns Over Time')
+ax.legend()
+
+# Rotate x-axis labels for readability
+ax.set_xticks(x)
+ax.tick_params(axis='x', rotation=90)
+
+# Save and show the plot
+fig.savefig('portfolio_returns_simple.png')
+plt.show()
+```
+<img width="706" height="556" alt="image" src="https://github.com/user-attachments/assets/c5290c74-3c93-431f-9c05-d5e1e08e70e2" />
+
+## Performance Analysis
+To assess performance, we compared the high portfolio with the baseline portfolio using their Sharpe and Sortino Ratios, along with maximum drawdown metrics.
+
+### 1. Sharpe Ratio
+``` Python
+# Computing Sharpe Ratio
+def compute_sharpe_ratio(returns, label):
+    sharpe_ratio = returns.mean() / returns.std()
+    print(f"Sharpe Ratio for {label}: {sharpe_ratio:.4f}")
+    return sharpe_ratio
+
+# Compute Sharpe ratios for two portfolios
+sharpe_high = compute_sharpe_ratio(df_high['yret_high'], "High Portfolio")
+sharpe_baseline = compute_sharpe_ratio(df_baseline['yret_baseline'], "Baseline of Portfolio")
+```
+<img width="359" height="38" alt="image" src="https://github.com/user-attachments/assets/32dc513f-bb79-4488-a78e-bc081402d0d4" />
+
+### 2. Sortino Ratio
+``` Python
+#Calculate the sortino ratio
+import numpy as np
+
+def compute_sortino_ratio(returns, target=0.0):
+    """
+    Compute Sortino Ratio using the same logic as the original version:
+    - Use all returns (mean of full sample)
+    - Only penalize returns below the target (with squared deviation)
+    """
+    # Calculate excess return
+    excess_return = returns - target
+
+    # Downside deviation (square of only negative excess returns)
+    squared_downside = np.minimum(0, excess_return) ** 2
+    downside_deviation = np.sqrt(np.mean(squared_downside))  # mean over full sample
+
+    # Sortino Ratio
+    sortino_ratio = excess_return.mean() / downside_deviation if downside_deviation != 0 else np.nan
+
+    return sortino_ratio
+
+# Apply to both portfolios
+sortino_high = compute_sortino_ratio(df_high['yret_high'], target=0)
+print(f"Sortino Ratio (Long Portfolio): {sortino_high:.4f}")
+
+sortino_baseline = compute_sortino_ratio(df_baseline['yret_baseline'], target=0)
+print(f"Sortino Ratio (Rest of Portfolio): {sortino_baseline:.4f}")
+```
+<img width="324" height="43" alt="image" src="https://github.com/user-attachments/assets/a8a0efe0-59f0-45c1-8388-0a2a2d5487b6" />
+
+
+### 3. Maximum Drawdown
+``` Python
+# Group yearly returns by portfolio formation years
+df_high = df_high.groupby('pfyr').mean()
+df_baseline = df_baseline.groupby('pfyr').mean()
+```
+
+**Maximum Drawdown for portfolio to high and baseline portfolio**
+``` Python
+# Compute maximum drawdown
+
+cumret = np.cumprod(df_high['yret_high']) 
+hwm = cumret.cummax()
+drawdown_perc = ((hwm - cumret) / hwm) * 100
+drawdown_abs = hwm - cumret
+
+maxDD_perc = drawdown_perc.max()
+maxDD_abs = drawdown_abs.max()
+
+print('Maximum drawdown for portfolio to high = ', round(maxDD_abs,2))
+print('Maximum drawdown for portfolio to high in % = ', round(maxDD_perc,2))
+
+
+cumret1 = np.cumprod(df_baseline['yret_baseline']) 
+hwm1 = cumret1.cummax()
+drawdown_perc1 = ((hwm1 - cumret1) / hwm1) * 100
+drawdown_abs1 = hwm1 - cumret1
+
+maxDD_perc1 = drawdown_perc1.max()
+maxDD_abs1 = drawdown_abs1.max()
+
+print()
+print('Maximum drawdown for baseline of portfolio = ', round(maxDD_abs1,2))
+print('Maximum drawdown for baseline of portfolio in % = ', round(maxDD_perc1,2))
+```
+<img width="446" height="85" alt="image" src="https://github.com/user-attachments/assets/b73cd946-5960-4f2d-b895-5b11ed6c5f1b" />
+
+**Maximum drawdown for long portfolio and the rest of portfolio**
+``` Python
+import numpy as np
+
+def compute_max_drawdown(returns, label="Portfolio"):
+    """
+    Computes the maximum drawdown (absolute and percent) from a series of returns.
+    
+    Args:
+        returns (pd.Series): Series of yearly returns (in decimal form, e.g., 0.12 for 12%)
+        label (str): Optional label for printout.
+        
+    Returns:
+        (float, float): Tuple of (max drawdown in absolute units, in %)
+    """
+    cumulative = np.cumprod(1 + returns)
+    peak = cumulative.cummax()
+    drawdown = peak - cumulative
+    drawdown_pct = (drawdown / peak) * 100
+
+    max_abs_dd = drawdown.max()
+    max_pct_dd = drawdown_pct.max()
+
+    print(f"Maximum drawdown for {label}: {max_abs_dd:.2f}")
+    print(f"Maximum drawdown for {label} in %: {max_pct_dd:.2f}%\n")
+
+    return max_abs_dd, max_pct_dd
+
+# Compute for both portfolios
+maxDD_abs_high, maxDD_perc_high = compute_max_drawdown(df_high['yret_high'], label="Long Portfolio")
+maxDD_abs_baseline, maxDD_perc_baseline = compute_max_drawdown(df_baseline['yret_baseline'], label="Rest of Portfolio")
+```
+<img width="402" height="89" alt="image" src="https://github.com/user-attachments/assets/9ae1c7b5-db62-4618-a4dc-9a862363f9a1" />
+
+**Performance Analysis Explanation:**
+The high portfolio generated an impressive average annual return of 46%, compared to just 10.5% for the baseline portfolio – an outperformance of nearly fourfold. This suggests that a systematic approach using the five combined signals can help investors to improve stock selection.
+
+In terms of risk-adjusted returns, the high portfolio stands out again. It achieved a Sharpe Ratio of 1.128, which is substantially higher than the baseline portfolio’s 0.293, indicating that the high portfolio earns significantly more return per unit of total risk. Moreover, the Sortinoratio which focuses more on the downside risk, paints an even clearer picture. The high portfolio recorded a Sortino Ratio of 4.35, compared to just 0.61 for the baseline portfolio. This indicates that the high-score portfolio not only generated stronger returns, but did so with considerably less downside volatility, making it an attractive option from risk perspective.
+
+We also evaluated how each portfolio performed during periods of market stress using the Maximum Drawdown metric, which captures the largest decline from peak to trough. The high portfolio experienced a drawdown of just 4.08%, while the baseline portfolio suffered a major 26.71% drawdown. In absolute terms, the high portfolio’s drawdown is 0.3714, compared to 0.1591 for the baseline. These findings underlined the high portfolio’s greater resilience to market decline and superiority in preserving capital.
+
+
+## Portfolio Performance Against S&P 500
+``` Python
+pip install yfinance --upgrade --no-cache-dir
+pip install yfinance pandas matplotlib
+
+import yfinance as yf
+import pandas as pd
+
+# Download S&P 500 data (adjusted close) from 2005-01-01 to 2023-12-31
+data = yf.download('^GSPC', start='2005-01-01', end='2023-12-31')
+
+# Calculate daily returns
+daily_returns = data['Close'].pct_change()
+
+# Calculate annual returns by compounding daily returns for each year
+annual_returns = (1 + daily_returns).resample('Y').prod() - 1
+
+# Change index to year only
+annual_returns.index = annual_returns.index.year
+
+# Print annual returns rounded to 4 decimals
+print("S&P 500 Annual Returns (2005-2023):")
+print(annual_returns.round(6))
+```
+<img width="1378" height="478" alt="image" src="https://github.com/user-attachments/assets/8dd0a23c-2b60-44b5-927c-d2be864c74af" />
+
+**Plotting Annual Returns Over Time**
+``` Python
+import matplotlib.pyplot as plt
+
+# Define the years
+x = [2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014,
+     2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023]
+
+# Make sure the arrays are aligned in length
+y = df_high['yret_high'].values[:len(x)]
+z = df_baseline['yret_baseline'].values[:len(x)]
+sp500 = annual_returns.values[:len(x)]  # Assuming annual_returns is a pandas Series aligned to x
+
+# Create the plot
+fig, ax = plt.subplots(figsize=(8, 6))
+
+# Plot each series with distinct color and marker
+ax.plot(x, y, color='blue', marker='o', label='Portfolio to Long')
+ax.plot(x, z, color='green', marker='s', label='Rest of Portfolio')
+ax.plot(x, sp500, color='red', marker='^', label='S&P 500')
+
+# Set axis labels and title
+ax.set_xlabel('Year')
+ax.set_ylabel('Annual Return')
+ax.set_title('Annual Returns Over Time')
+
+# Show legend
+ax.legend()
+
+# Rotate x-axis ticks for better readability
+ax.set_xticks(x)
+ax.tick_params(axis='x', rotation=90)
+
+# Save and show plot
+fig.savefig('portfolio_returns_comparison.png')
+plt.show()
+```
+<img width="712" height="558" alt="image" src="https://github.com/user-attachments/assets/e6c2fc9f-370d-4459-a626-16ff909baca3" />
+
+**Explanation:**
+
+We assessed whether the high portfolio consistently outperformed and generated alpha returns above and beyond what would be expected given market exposure. Overall, the high portfolio demonstrates strong and consistent outperformance. It not only generated higher average annual returns but also captured more of the upside during bullish markets while displaying greater resilience during downturns.
+
+Almost every year except 2019 and 2021, the high portfolio outpaced the S&P 500 significantly, consistently capturing more of the market's gains. In 2019, the Federal Reserve implemented interest rate cuts three times, which made borrowing cheaper and encouraged more spending and investing. This helped companies, especially in the fintech sectors, do well. In addition, the easing tensions between the U.S. and China toward the end of the year, including progress on a "Phase One" trade deal, further boosted confidence in global markets. Since the S&P 500 includes many of these companies and the high portfolio did not include financials, the S&P 500 ended up doing better that year.
+
+In 2021, the market was driven by an extraordinary post-pandemic recovery, underpinned by massive fiscal stimulus and ultra-loose monetary policy. The U.S. government introduced massive stimulus packages, and the Federal Reserve kept interest rates near zero. This injection of liquidity propelled equity markets, especially for large-cap growth stocks. Tech giants like Apple, Microsoft, Tesla, and NVIDIA – heavily weighted in the S&P 500 index –
+
+## Research Limitation
+There are several limitations that our group faced conducting this research. Firstly, our research is limited to only 5 signals to identify mispriced stocks with alpha-generating potential, such as ESG scores. However, our group found out that the ESG data availability is limited to August 2009–September 2015, and thus we decided to exclude the variable from our research. Other signals to consider would be default risk, operating stability, cheapness, and earnings quality. 
+
+Secondly, this study is limited to U.S. companies listed on the NYSE, American Stock Exchange, and NASDAQ only for the period of January 2004 to May 2025. While this sample meets the research requirements, other researchers are encouraged to explore alternative subsets of the tradeable U.S. equity universe, excluding banks and financial institutions, that also satisfy the minimum data coverage and relevance criteria. For instance, the usage of different time frames, market capitalization thresholds, or index constituents, depending on the specific research objectives. 
+
+## Conclusion
+Based on our linear regression analysis of annual returns on five financial signals, our findings indicated that four out of five signals aligned with our expectations. The only exception wasthe market capitalization signal, which measures firm size. Contrary to our hypothesis,smaller firms did not consistently generate excess returns compared to larger firms. Furthermore, our analysis shows that the high-ranked portfolios consistently outperformed the market, delivering alpha returns above and beyond the S&P 500 benchmark. This suggests that,despite certain limitations, such as the restricted number of signals and the limited tradeable universe of U.S. companies, the selected variables effectively contributed to identifying firms with strong return potential. 
+
+We believe this research offers valuable insights for investors seeking to evaluate financial variables with a positive impact on firm performance, as well as for students conducting similar studies. Future research may benefit from expanding the signal set or exploring alternative samples within the tradeable U.S. equity universe, provided they meet the necessary data and methodological requirements
+
+
+
+
 
 
 
